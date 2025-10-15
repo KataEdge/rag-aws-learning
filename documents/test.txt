@@ -1,0 +1,5 @@
+
+        RAG（Retrieval-Augmented Generation）は、大規模言語モデルに外部知識を組み合わせる手法です。
+        ベクトルデータベースを使って関連情報を検索し、その情報を元にLLMが回答を生成します。
+        AWSではAmazon BedrockとOpenSearch Serverlessを組み合わせてRAGシステムを構築できます。
+        
