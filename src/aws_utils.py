@@ -1,17 +1,70 @@
 import boto3
-from langchain_aws import BedrockLLM
+import time
+import json
+from typing import Dict, Any
+import botocore
+import random
 
-def get_bedrock_llm():
-    """
-    Get the Bedrock LLM.
-    """
-    bedrock_runtime = boto3.client(
-        service_name="bedrock-runtime",
-    )
+# リクエスト間に2秒待機
+time.sleep(2)
+
+class BedrockClient:
+    def __init__(self, region_name='ap-northeast-1'):
+        self.client = boto3.client(
+            service_name='bedrock-runtime',
+            region_name=region_name
+        )
+        self.model_id = 'anthropic.claude-3-haiku-20240307-v1:0'
     
-    llm = BedrockLLM(
-        client=bedrock_runtime,
-        model_id="anthropic.claude-3-sonnet-20240229-v1:0",
-    )
+    def invoke_claude(self, prompt: str, max_tokens: int = 2000) -> str:
+        """
+        Claude 3 Haikuを呼び出し
+        """
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": max_tokens,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.7,
+        })
+        
+        max_retries = 5
+        backoff = 0.5
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.invoke_model(
+                    modelId=self.model_id,
+                    body=body
+                )
+                
+                response_body = json.loads(response['body'].read())
+                return response_body['content'][0]['text']
+            
+            except botocore.exceptions.ClientError as e:
+                error_code = e.response['Error']['Code']
+                if error_code == 'ThrottlingException':
+                    wait = backoff * (2 ** attempt) + random.uniform(0, 0.5)
+                    print(f"⚠️ Throttling発生。{wait:.1f}秒待機して再試行します ({attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                else:
+                    raise
+            except Exception as e:
+                print(f"❌ Bedrock呼び出しエラー: {e}")
+                raise
     
-    return llm
+    def test_connection(self) -> bool:
+        """
+        接続テスト
+        """
+        try:
+            result = self.invoke_claude("Hello, please respond with 'OK'")
+            print(f"✅ Bedrock接続成功: {result}")
+            return True
+        except Exception as e:
+            print(f"❌ Bedrock接続失敗: {e}")
+            return False
