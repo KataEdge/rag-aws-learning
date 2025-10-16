@@ -1,3 +1,4 @@
+import gradio as gr
 from src.document_loader import DocumentLoader
 from src.embeddings import EmbeddingManager
 from src.vector_store import VectorStoreManager
@@ -7,46 +8,24 @@ from src.s3_manager import S3Manager
 from dotenv import load_dotenv
 import os
 
-def setup_demo_documents():
-    """デモ用ドキュメントを作成"""
+# ---
+# グローバル変数としてRAGチェーンを保持
+# ---
+rag_chain = None
+
+def setup_documents_directory():
+    """documentsディレクトリを作成し、ユーザーにファイル配置を促す"""
     os.makedirs('documents', exist_ok=True)
+    print("ℹ️  'documents' ディレクトリを準備しました。")
+    print("ここに情報源としたいPDFやテキストファイルを置いてください。")
+    return True # 常に成功を返す
+
+import shutil
+
+def initialize_rag_system():
+    """RAGシステムを初期化"""
+    global rag_chain
     
-    # 日本語のサンプルドキュメント
-    with open('documents/rag_basics.txt', 'w', encoding='utf-8') as f:
-        f.write("""
-RAG（Retrieval-Augmented Generation）の基礎
-
-RAGは、大規模言語モデル（LLM）に外部知識を組み合わせる革新的な手法です。
-従来のLLMは学習データに含まれる知識のみで回答しますが、RAGでは以下のプロセスで動作します。
-
-1. ユーザーの質問をベクトル化
-2. ベクトルデータベースから関連情報を検索
-3. 検索結果をコンテキストとしてLLMに渡す
-4. LLMが検索結果を元に回答を生成
-
-このアプローチにより、最新情報や特定ドメインの知識を活用できます。
-        """)
-    
-    with open('documents/aws_bedrock.txt', 'w', encoding='utf-8') as f:
-        f.write("""
-Amazon Bedrockについて
-
-Amazon Bedrockは、AWSが提供するフルマネージド型の生成AIサービスです。
-以下の特徴があります：
-
-- Anthropic Claude、Amazon Titan、Meta Llamaなど複数のLLMを利用可能
-- API経由で簡単に呼び出し可能
-- 従量課金制で初期費用不要
-- セキュリティとプライバシーに配慮した設計
-
-料金体系：
-- Claude 3 Haiku: 入力1000トークンあたり$0.00025、出力1000トークンあたり$0.00125
-- Claude 3.5 Sonnet: より高性能だが高額
-
-東京リージョン(ap-northeast-1)でも利用可能です。
-        """)
-
-def main():
     # 環境変数読み込み
     load_dotenv()
     
@@ -54,8 +33,16 @@ def main():
     print("🚀 RAG + AWS Bedrockシステムの起動")
     print("="*60)
     
-    # デモドキュメント作成
-    setup_demo_documents()
+    # ドキュメントディレクトリを準備
+    if not setup_documents_directory():
+        # この分岐は現在通りませんが、念のため残しておきます
+        print("ドキュメントディレクトリの準備に失敗しました。")
+        return False, "ディレクトリ準備失敗"
+        
+    # 古いベクトルストアを削除
+    if os.path.exists('chroma'):
+        print("🗑️  古いベクトルストアを削除しています...")
+        shutil.rmtree('chroma')
     
     # 1. ドキュメント読み込みとベクトル化
     print("\n📄 ステップ1: ドキュメント処理")
@@ -76,11 +63,9 @@ def main():
     print("-"*60)
     vector_manager = VectorStoreManager(embeddings)
     
-    # 既存のベクトルストアがあれば読み込み、なければ作成
-    try:
-        vector_manager.load_vectorstore()
-    except FileNotFoundError:
-        vector_manager.create_vectorstore(documents)
+    # 常にベクトルストアを再構築
+    print("🔄 ベクトルストアを再構築します...")
+    vector_manager.create_vectorstore(documents)
     
     # 4. Bedrock接続テスト
     print("\n🔌 ステップ4: AWS Bedrock接続")
@@ -88,62 +73,76 @@ def main():
     bedrock_client = BedrockClient(region_name=os.getenv('AWS_REGION', 'ap-northeast-1'))
     
     if not bedrock_client.test_connection():
-        print("❌ Bedrock接続に失敗しました。以下を確認してください:")
-        print("  1. AWS CLIで認証情報が設定されているか")
-        print("  2. Bedrockでモデルアクセスが有効化されているか")
-        print("  3. IAMユーザーにbedrock:InvokeModel権限があるか")
-        return
+        print("❌ Bedrock接続に失敗しました。")
+        return False, "Bedrock接続に失敗"
     
     # 5. RAGチェーン作成
     print("\n⛓️  ステップ5: RAGチェーン構築")
     print("-"*60)
     rag_chain = RAGChain(vector_manager, bedrock_client)
     print("✅ RAGシステム準備完了")
+    return True, "RAGシステム準備完了"
+
+def answer_question(question):
+    """質問に回答する"""
+    if rag_chain is None:
+        return "RAGシステムが初期化されていません。", "ソースはありません。"
     
-    # 6. 質問応答デモ
-    print("\n" + "="*60)
-    print("💡 RAGシステムで質問に答えます")
-    print("="*60)
+    print(f"\n🤔 質問受信: {question}")
+    result = rag_chain.query(question, k=2)
     
-    questions = [
-        "RAGとは何ですか？どのように動作しますか？",
-        "Amazon Bedrockの料金体系について教えてください",
-        "Claude 3 Haikuの特徴は何ですか？"
-    ]
+    # 回答とソースを整形
+    answer = result.get('answer', "回答が見つかりませんでした。")
     
-    for question in questions:
-        result = rag_chain.query(question, k=2)
-        rag_chain.pretty_print_result(result)
-        print("\n")
-    
-    # 7. S3連携デモ（オプション）
-    print("\n" + "="*60)
-    print("☁️  オプション: S3連携デモ")
-    print("="*60)
-    
-    bucket_name = os.getenv('S3_BUCKET_NAME')
-    if bucket_name and bucket_name != 'your-rag-documents-bucket':
-        try:
-            s3_manager = S3Manager(bucket_name)
-            s3_manager.create_bucket_if_not_exists()
-            
-            # ドキュメントをS3にアップロード
-            for file in os.listdir('documents'):
-                file_path = os.path.join('documents', file)
-                s3_manager.upload_file(file_path, f'documents/{file}')
-            
-            # バケット内のファイル一覧
-            files = s3_manager.list_files('documents/')
-            print(f"\n📦 S3バケット内のファイル: {files}")
-            
-        except Exception as e:
-            print(f"⚠️  S3連携スキップ: {e}")
+    source_documents = result.get('source_documents', [])
+    sources_text = "\n\n---\n\n**ソース:**\n"
+    if source_documents:
+        for doc in source_documents:
+            source_info = doc.metadata.get('source', '不明なソース')
+            sources_text += f"- {source_info}\n"
     else:
-        print("⚠️  S3_BUCKET_NAMEが設定されていないためスキップ")
+        sources_text += "関連するソースは見つかりませんでした。"
     
+    print("✅ 回答生成完了")
+    return answer, sources_text
+
+def main():
+    # RAGシステムの初期化
+    success, message = initialize_rag_system()
+    if not success:
+        print(message)
+        return
+        
+    # Gradio UIの構築
+    with gr.Blocks(title="AWS Bedrock RAG Demo") as demo:
+        gr.Markdown("# AWS Bedrockを使ったRAGシステム")
+        gr.Markdown("ドキュメントに関する質問をしてください。")
+        
+        with gr.Row():
+            question_input = gr.Textbox(label="質問", placeholder="RAGとは何ですか？", scale=4)
+            submit_button = gr.Button("質問する")
+            clear_button = gr.Button("クリア")
+
+        with gr.Row():
+            answer_output = gr.Textbox(label="回答", lines=5, interactive=False)
+            sources_output = gr.Textbox(label="ソース", lines=5, interactive=False)
+
+        submit_button.click(
+            fn=answer_question,
+            inputs=question_input,
+            outputs=[answer_output, sources_output]
+        )
+        
+        clear_button.click(
+            fn=lambda: ("", "", ""),
+            inputs=None,
+            outputs=[question_input, answer_output, sources_output]
+        )
+        
     print("\n" + "="*60)
-    print("✅ 全ての処理が完了しました！")
+    print("💡 Gradio UIを起動します。 http://127.0.0.1:7860 で開いてください。")
     print("="*60)
+    demo.launch()
 
 if __name__ == "__main__":
     main()
