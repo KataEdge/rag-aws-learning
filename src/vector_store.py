@@ -1,4 +1,4 @@
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 import os
 
 class VectorStoreManager:
@@ -34,3 +34,11 @@ class VectorStoreManager:
         if self.vectorstore is None:
             raise ValueError("ベクトルストアが初期化されていません")
         return self.vectorstore.similarity_search(query, k=k)
+
+    def add_documents(self, documents):
+        """ベクトルストアにドキュメントを追加"""
+        if self.vectorstore is None:
+            raise ValueError("ベクトルストアが初期化されていません")
+        
+        self.vectorstore.add_documents(documents)
+        print(f"{len(documents)}件のドキュメントをベクトルストアに追加しました")

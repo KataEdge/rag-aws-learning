@@ -2,7 +2,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 import torch
 
 class EmbeddingManager:
-    def __init__(self, model_name='intfloat/multilingual-e5-base'):
+    def __init__(self, model_name='BAAI/bge-m3'):
         """
         多言語対応の埋め込みモデル（日本語もサポート）
         """

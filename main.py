@@ -59,7 +59,7 @@ def initialize_rag_system():
     rag_chain_instance = RAGChain(vector_manager, bedrock_client)
     print("✅ RAGシステム準備完了")
     
-    return rag_chain_instance
+    return rag_chain_instance, vector_manager
 
 def answer_question(rag_chain, question, history):
     """質問に回答する"""
@@ -92,16 +92,66 @@ def answer_question(rag_chain, question, history):
 
 def main():
     st.set_page_config(page_title="AWS Bedrock RAG Demo", page_icon="🤖")
-    st.title("AWS Bedrockを使ったRAGシステム")
+    st.title("🤖 AWS Bedrock RAG デモアプリ")
     st.markdown("ドキュメントに関する質問をしてください。")
 
     # RAGシステムの初期化
     try:
-        rag_chain = initialize_rag_system()
+        rag_chain, vector_manager = initialize_rag_system()
         st.success("RAGシステムの準備が完了しました。")
     except Exception as e:
         st.error(f"RAGシステムの初期化中にエラーが発生しました: {e}")
         st.stop()
+
+    # --- サイドバーのUI ---
+    with st.sidebar:
+        st.header("ナレッジ管理")
+        st.markdown("ファイルを追加して、RAGシステムの知識を更新します。")
+        
+        uploaded_files = st.file_uploader(
+            "文書ファイルを選択",
+            accept_multiple_files=True,
+            type=['pdf', 'txt', 'docx', 'xlsx'],
+            help="PDF, テキスト, Word, Excelファイルをアップロードできます。"
+        )
+
+        if st.button("アップロードして知識を更新", type="primary"):
+            if uploaded_files:
+                temp_dir = "temp_uploaded_files"
+                
+                with st.spinner(f"{len(uploaded_files)}個のファイルを処理中..."):
+                    try:
+                        # 一時ディレクトリを作成
+                        if not os.path.exists(temp_dir):
+                            os.makedirs(temp_dir)
+
+                        # ファイルを一時保存
+                        for uploaded_file in uploaded_files:
+                            file_path = os.path.join(temp_dir, uploaded_file.name)
+                            with open(file_path, "wb") as f:
+                                f.write(uploaded_file.getvalue())
+
+                        # ドキュメントを読み込んでチャンクに分割
+                        loader = DocumentLoader()
+                        documents = loader.load_directory(temp_dir)
+
+                        if documents:
+                            # ベクトルストアに追加
+                            vector_manager.add_documents(documents)
+                            st.success(f"知識ベースを更新しました ({len(documents)}チャンク追加)")
+                        else:
+                            st.warning("アップロードされたファイルからテキストを抽出できませんでした。")
+
+                    except Exception as e:
+                        st.error(f"処理中にエラーが発生しました: {e}")
+                    
+                    finally:
+                        # 一時ディレクトリをクリーンアップ
+                        if os.path.exists(temp_dir):
+                            shutil.rmtree(temp_dir)
+
+            else:
+                st.warning("ファイルが選択されていません。")
 
     # チャット履歴をセッション状態で管理
     if "messages" not in st.session_state:
