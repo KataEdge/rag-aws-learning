@@ -7,3 +7,5 @@ chromadb>=0.4.0
 pypdf>=3.17.0
 python-dotenv>=1.0.0
 gradio>=4.0.0
+streamlit>=1.30.0
+unstructured[docx,xlsx]>=0.14.0

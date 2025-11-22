@@ -1,4 +1,4 @@
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredFileLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
 
@@ -15,13 +15,19 @@ class DocumentLoader:
         loader = PyPDFLoader(file_path)
         documents = loader.load()
         return self.text_splitter.split_documents(documents)
-    
+
     def load_text(self, file_path):
         """テキストファイルを読み込み"""
         loader = TextLoader(file_path, encoding='utf-8')
         documents = loader.load()
         return self.text_splitter.split_documents(documents)
-    
+
+    def load_unstructured_file(self, file_path):
+        """WordやExcelなどの非構造化ファイルを読み込み"""
+        loader = UnstructuredFileLoader(file_path)
+        documents = loader.load()
+        return self.text_splitter.split_documents(documents)
+
     def load_directory(self, directory_path):
         """ディレクトリ内の全ファイルを読み込み"""
         all_documents = []
@@ -31,4 +37,6 @@ class DocumentLoader:
                 all_documents.extend(self.load_pdf(file_path))
             elif filename.endswith('.txt'):
                 all_documents.extend(self.load_text(file_path))
+            elif filename.endswith('.docx') or filename.endswith('.xlsx'):
+                all_documents.extend(self.load_unstructured_file(file_path))
         return all_documents

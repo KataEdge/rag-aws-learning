@@ -8,13 +8,18 @@ import random
 # リクエスト間に2秒待機
 time.sleep(2)
 
+import os
+
 class BedrockClient:
-    def __init__(self, region_name='ap-northeast-1'):
+    def __init__(self, region_name='ap-northeast-1', model_id=None):
         self.client = boto3.client(
             service_name='bedrock-runtime',
             region_name=region_name
         )
-        self.model_id = 'anthropic.claude-3-haiku-20240307-v1:0'
+        if model_id:
+            self.model_id = model_id
+        else:
+            self.model_id = os.getenv('BEDROCK_MODEL_ID', 'anthropic.claude-3-haiku-20240307-v1:0')
     
     def invoke_claude(self, prompt: str, max_tokens: int = 2000) -> str:
         """
