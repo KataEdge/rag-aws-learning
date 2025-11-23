@@ -1,8 +1,9 @@
+
 import streamlit as st
 from src.document_loader import DocumentLoader
 from src.embeddings import EmbeddingManager
 from src.vector_store import VectorStoreManager
-from src.aws_utils import BedrockClient
+from src.aws_utils import BedrockClient, GeminiClient
 from src.rag_chain import RAGChain
 from src.s3_manager import S3Manager
 from dotenv import load_dotenv
@@ -13,28 +14,35 @@ import shutil
 # Streamlitのキャッシュ機能を使ってRAGチェーンを効率的に初期化
 # ---
 @st.cache_resource
-def initialize_rag_system():
+def initialize_rag_system(model_id):
     """RAGシステムを初期化"""
-    
+
     # 環境変数読み込み
     load_dotenv()
-    
+
     print("="*60)
     print("🚀 RAG + AWS Bedrockシステムの起動")
     print("="*60)
-    
-    # ドキュメントディレクトリを準備
-    os.makedirs('documents', exist_ok=True)
+
+    # ドキュメントディレクトリを準備（Downloadsフォルダを使用）
+    documents_dir = os.path.expanduser('~/Downloads')
+    os.makedirs(documents_dir, exist_ok=True)
 
     # 1. 埋め込みモデル準備
     print("\n🤖 ステップ1: 埋め込みモデル準備")
     embedding_manager = EmbeddingManager()
     embeddings = embedding_manager.get_embeddings()
-    
+
     # 2. ベクトルストア準備
     print("\n💾 ステップ2: ベクトルストア準備")
     vector_manager = VectorStoreManager(embeddings)
-    
+
+    # モデルタイプに応じてクライアントを作成
+    if 'gemini' in model_id:
+        client = GeminiClient(model_name=model_id)
+    else:
+        client = BedrockClient(region_name=os.getenv('AWS_REGION', 'ap-northeast-1'), model_id=model_id)
+
     # 永続化されたベクトルストアがあれば読み込み、なければ新規作成
     try:
         vector_manager.load_vectorstore()
@@ -43,35 +51,42 @@ def initialize_rag_system():
         print("🤔 既存のベクトルストアが見つからないため、新規に作成します")
         # ドキュメント読み込み
         print("📄 ドキュメント処理中...")
-        loader = DocumentLoader()
-        documents = loader.load_directory('documents')
+        loader = DocumentLoader(bedrock_client=client)
+        documents = loader.load_directory(documents_dir)
         print(f"✅ {len(documents)}個のチャンクを作成")
-        
+
         vector_manager.create_vectorstore(documents)
         print("✅ 新規ベクトルストアの作成完了")
-    
-    # 4. Bedrockクライアント準備
-    print("\n🔌 ステップ4: AWS Bedrock接続")
-    bedrock_client = BedrockClient(region_name=os.getenv('AWS_REGION', 'ap-northeast-1'))
-    
+
+
+    # モデル利用可能性チェック
+    print(f"🔍 モデル {model_id} の利用可能性を確認中...")
+    try:
+        client.test_connection()
+        print("✅ モデル利用可能")
+    except Exception as e:
+        error_msg = f"選択されたモデル '{model_id}' は利用できません: {e}"
+        print(f"❌ {error_msg}")
+        raise ValueError(error_msg)
+
     # 5. RAGチェーン作成
     print("\n⛓️  ステップ5: RAGチェーン構築")
-    rag_chain_instance = RAGChain(vector_manager, bedrock_client)
+    rag_chain_instance = RAGChain(vector_manager, client)
     print("✅ RAGシステム準備完了")
-    
+
     return rag_chain_instance, vector_manager
 
-def answer_question(rag_chain, question, history):
+def answer_question(rag_chain, question, history, temperature=0.1, k=2):
     """質問に回答する"""
     if rag_chain is None:
         return "エラー: RAGシステムが初期化されていません。"
 
     print(f"\n🤔 質問受信: {question}")
-    
+
     # LangChainの形式に履歴を変換
     langchain_history = [{"human": h, "ai": a} for h, a in history]
-    
-    result = rag_chain.query(question, history=langchain_history, k=2)
+
+    result = rag_chain.query(question, history=langchain_history, k=k, temperature=temperature)
     
     answer = result.get('answer', "回答が見つかりませんでした。")
     
@@ -95,16 +110,64 @@ def main():
     st.title("🤖 AWS Bedrock RAG デモアプリ")
     st.markdown("ドキュメントに関する質問をしてください。")
 
+    # --- モデル選択 ---
+    # 利用可能なモデル (Provisioned Throughput不要の安定したOn-Demandエイリアスを使用)
+    available_models = {
+        "Claude 3 Haiku": "anthropic.claude-3-haiku-20240307-v1:0",
+        "Amazon Nova Lite": "amazon.nova-lite-v1:0",
+        "gemini-2.5-flash": "gemini-2.5-flash",
+    }
+
+    # 環境変数からデフォルトモデルを取得
+    default_model_id = os.getenv('BEDROCK_MODEL_ID', 'anthropic.claude-3-haiku-20240307-v1:0')
+    default_model_name = None
+    for name, model_id in available_models.items():
+        if model_id == default_model_id:
+            default_model_name = name
+            break
+    if default_model_name is None:
+        default_model_name = "Claude 3 Haiku 4.5"  # フォールバック
+
+    selected_model_name = st.selectbox(
+        "LLMモデル",
+        options=list(available_models.keys()),
+        index=list(available_models.keys()).index(default_model_name),
+        help="使用するLLMモデルを選択してください。"
+    )
+
+    selected_model_id = available_models[selected_model_name]
+
+    # Temperature設定
+    temperature = st.slider(
+        "Temperature (創造性)",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.1,
+        step=0.1,
+        help="低い値（0.0-0.3）：事実に基づいた正確な回答、高い値（0.7-1.0）：創造的な回答"
+    )
+
+    # 検索文書数設定
+    k = st.slider(
+        "検索文書数 (k)",
+        min_value=1,
+        max_value=10,
+        value=2,
+        step=1,
+        help="検索して使用する関連文書の数を設定します。多いほど多様な情報が考慮されますが、処理時間が長くなります。"
+    )
+
     # RAGシステムの初期化
     try:
-        rag_chain, vector_manager = initialize_rag_system()
-        st.success("RAGシステムの準備が完了しました。")
+        rag_chain, vector_manager = initialize_rag_system(model_id=selected_model_id)
+        st.success(f"RAGシステムの準備が完了しました。使用モデル: {selected_model_name}")
     except Exception as e:
         st.error(f"RAGシステムの初期化中にエラーが発生しました: {e}")
         st.stop()
 
     # --- サイドバーのUI ---
     with st.sidebar:
+
         st.header("ナレッジ管理")
         st.markdown("ファイルを追加して、RAGシステムの知識を更新します。")
         
@@ -136,9 +199,9 @@ def main():
                         documents = loader.load_directory(temp_dir)
 
                         if documents:
-                            # ベクトルストアに追加
-                            vector_manager.add_documents(documents)
-                            st.success(f"知識ベースを更新しました ({len(documents)}チャンク追加)")
+                            # ベクトルストアに同期（差分更新）
+                            result = vector_manager.sync_documents(documents)
+                            st.info(f"追加: {result['num_added']}, 更新: {result['num_updated']}, スキップ: {result['num_skipped']}, 削除: {result['num_deleted']}")
                         else:
                             st.warning("アップロードされたファイルからテキストを抽出できませんでした。")
 
@@ -172,15 +235,15 @@ def main():
         # AIの応答を生成
         with st.chat_message("assistant"):
             with st.spinner("回答を生成中です..."):
-                # Streamlitの履歴形式からLangChainの履歴形式へ変換
-                history_for_chain = [(msg["content"]) for msg in st.session_state.messages if msg["role"] == "user"]
+                # 会話履歴を (human, ai) のペアに変換（最後のユーザーメッセージを除く）
                 history_pairs = []
-                if len(history_for_chain) > 1:
-                     # 最後の質問は除く
-                    history_pairs = list(zip(history_for_chain[:-1:2], history_for_chain[1::2]))
+                messages = st.session_state.messages[:-1]  # 最後のユーザーメッセージを除く
+                for i in range(0, len(messages) - 1, 2):
+                    if i + 1 < len(messages) and messages[i]["role"] == "user" and messages[i + 1]["role"] == "assistant":
+                        history_pairs.append((messages[i]["content"], messages[i + 1]["content"]))
 
 
-                response = answer_question(rag_chain, prompt, history_pairs)
+                response = answer_question(rag_chain, prompt, history_pairs, temperature, k)
                 st.markdown(response)
         
         # AIの応答を履歴に追加
