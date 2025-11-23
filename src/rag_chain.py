@@ -15,10 +15,9 @@ class RAGChain:
 
         history_text = "\n".join([f"H: {h['human']}\nA: {h['ai']}" for h in history])
         
-        prompt = f"""H: 以下の会話履歴を踏まえて、最後のユーザーの質問を、文脈を補完した自己完結型の質問に書き換えてください。
-書き換えた質問のみを返してください。
+        system_prompt = "あなたは会話の文脈を理解して、質問をより明確にするアシスタントです。与えられた会話履歴を踏まえて、最後のユーザーの質問を、文脈を補完した自己完結型の質問に書き換えてください。書き換えた質問のみを返してください。"
 
-# 会話履歴
+        user_prompt = f"""# 会話履歴
 {history_text}
 
 # 最後の質問
@@ -26,76 +25,89 @@ class RAGChain:
 
 # 書き換えた質問
 """
-        
-        rewritten_query = self.bedrock.invoke_claude(prompt)
+
+        print(f"🔄 クエリ書き換え中... (Temperature: 0.1)")
+        rewritten_query = self.bedrock.invoke_claude(user_prompt, system_prompt=system_prompt, temperature=0.1)
         print(f"🔄 クエリを書き換え: '{query}' -> '{rewritten_query}'")
         return rewritten_query
 
-    def create_prompt(self, query: str, context_docs: List[Document], history: List[Dict[str, str]]) -> str:
+    def create_prompt(self, query: str, context_docs: List[Document], history: List[Dict[str, str]]) -> tuple[str, str]:
         """
         検索結果と会話履歴を元にプロンプトを作成
+        Returns: (system_prompt, user_prompt)
         """
+        # システムプロンプト
+        system_prompt = """あなたはRAG（Retrieval-Augmented Generation）システムのアシスタントです。
+以下の参考文書と会話履歴を踏まえて、ユーザーの質問に答えてください。
+
+回答の原則:
+- 参考文書と会話履歴から関連情報を優先的に使用してください
+- 文書に記載されていない情報については、一般知識を使用しても構いません
+- 情報源が不明確な場合は「文書には記載されていません」と明確に述べてください
+- 回答は正確で、根拠に基づいたものにしてください"""
+
         # コンテキストを結合
         context = "\n\n".join([
             f"[文書{i+1}]\n{doc.page_content}"
             for i, doc in enumerate(context_docs)
         ])
-        
+
         # 会話履歴を整形
-        history_text = "\n".join([f"H: {h['human']}\nA: {h['ai']}" for h in history])
+        history_text = "\n".join([f"Human: {h['human']}\nAssistant: {h['ai']}" for h in history])
 
-        # プロンプトテンプレート
-        prompt = f"""H: 以下の参考文書と会話履歴を踏まえて、最後の質問に答えてください。
-回答はまず参考文書と会話履歴から生成してください。
-もし参考文書や会話履歴に該当する情報がない場合は、あなたが持つ一般的な知識を用いて回答しても構いません。
-ただし、文書に書かれていない情報については、推測せず「文書には記載されていません」と明確に述べてください。
-
-# 参考文書
+        # ユーザープロンプト
+        user_prompt = f"""# 参考文書
 {context}
 
 # 会話履歴
 {history_text}
 
 # 質問
-{query}
+{query}"""
 
-A: """
-        return prompt
+        return system_prompt, user_prompt
 
-    def query(self, question: str, history: List[Dict[str, str]] = [], k: int = 3) -> Dict[str, Any]:
+    def query(self, question: str, history: List[Dict[str, str]] = [], k: int = 3, temperature: float = 0.1) -> Dict[str, Any]:
         """
         RAGパイプライン全体を実行
-        
+
         Args:
             question: ユーザーの質問
             history: 会話履歴
             k: 検索する文書数
-        
+
         Returns:
             回答と検索結果を含む辞書
         """
         # 1. クエリ書き換え
         rewritten_question = self.rewrite_query(question, history)
 
-        # 2. ベクトル検索
-        print(f"\n🔍 関連文書を検索中... (上位{k}件)")
-        relevant_docs = self.vector_store.similarity_search(rewritten_question, k=k)
-        
+        # 2. ハイブリッド検索
+        print(f"\n🔍 関連文書をハイブリッド検索中... (上位{k}件)")
+        hybrid_retriever = self.vector_store.get_hybrid_retriever()
+        if hybrid_retriever:
+            all_docs = hybrid_retriever.invoke(rewritten_question)
+            relevant_docs = all_docs[:k]
+        else:
+            # フォールバック: ベクトル検索
+            print("ハイブリッド検索が利用できないため、ベクトル検索にフォールバックします")
+            relevant_docs = self.vector_store.similarity_search(rewritten_question, k=k)
+
         print(f"✅ {len(relevant_docs)}件の関連文書を取得")
-        
+
         # 3. プロンプト作成
-        prompt = self.create_prompt(question, relevant_docs, history) # 元の質問をプロンプトに使う
-        
+        system_prompt, user_prompt = self.create_prompt(question, relevant_docs, history)
+
         # 4. LLMで回答生成
-        print("🤖 LLMで回答を生成中...")
-        answer = self.bedrock.invoke_claude(prompt)
-        
+        print(f"🤖 LLMで回答を生成中... (Temperature: {temperature})")
+        answer = self.bedrock.invoke_claude(user_prompt, system_prompt=system_prompt, temperature=temperature)
+
         # 5. 結果を返す
         return {
             'question': question,
             'answer': answer,
             'source_documents': relevant_docs,
-            'prompt': prompt  # デバッグ用
+            'prompt': user_prompt  # デバッグ用
         }
     
     def pretty_print_result(self, result: Dict[str, Any]):
