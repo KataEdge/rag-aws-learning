@@ -81,7 +81,7 @@ Documents → Document Loader → Embeddings → Vector Store → Retriever → 
 
 ## プロジェクト構造
 
-　```
+```text
 ├── main.py                 # Streamlitアプリケーションのメインエントリーポイント
 ├── batch_ingest.py         # バッチドキュメント取り込みスクリプト
 ├── src/
@@ -94,7 +94,7 @@ Documents → Document Loader → Embeddings → Vector Store → Retriever → 
 ├── documents/              # サンプルドキュメント
 ├── requirements.txt        # Python依存関係
 └── .env                    # 環境変数設定
-　```
+```
 
 ## 機能詳細
 
