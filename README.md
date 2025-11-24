@@ -1,21 +1,24 @@
-# RAG AWS Learning - 多様なLLMを活用したRAGデモアプリケーション
+# RAG AWS Learning - 多様なLLMを活用したマルチモーダルRAGデモアプリケーション
 
-このプロジェクトは、Retrieval-Augmented Generation (RAG) を使用したドキュメント検索・質問応答システムのデモアプリケーションです。AWS Bedrock、Google Gemini、Amazon Novaなどの複数のLLMをサポートしています。
+このプロジェクトは、Retrieval-Augmented Generation (RAG) を使用したドキュメント検索・質問応答システムのデモアプリケーションです。AWS Bedrock、Google GeminiなどのLLMをサポートし、マルチモーダル（テキスト+画像）処理に対応しています。
 
 ## 特徴
 
-- **多様なLLMサポート**: AWS Bedrock (Claude, Nova)、Google Geminiを統合
-- **ドキュメント管理**: PDF、テキスト、Word、Excelファイルのアップロードと自動処理
-- **ベクトル検索**: FAISSを使用した効率的な類似度検索
-- **ハイブリッド検索**: キーワード検索とベクトル検索の組み合わせ
-- **Streamlit UI**: 直感的なWebインターフェース
+- **多様なLLMサポート**: AWS Bedrock (Claude, Nova)、Google Gemini 2.5 Flash
+- **マルチモーダル対応**: テキストドキュメントと画像の同時処理
+- **高度なチャンキング**: 構造保持型チャンキング（Unstructured + ルールベース）
+- **ハイブリッド検索**: BM25キーワード検索 + ベクトル検索 + メタデータフィルタ
+- **Streamlit UI**: タブ分けされた直感的なWebインターフェース
 - **会話履歴**: コンテキストを保持した継続的な対話
-- **動的パラメータ調整**: Temperatureや検索文書数のリアルタイム変更
+- **動的パラメータ調整**: Temperature、検索文書数、フィルタのリアルタイム変更
+- **ドキュメント管理**: 差分更新による効率的な知識ベース管理
 
 ## アーキテクチャ
 
 ```text
-Documents → Document Loader → Embeddings → Vector Store → Retriever → LLM → Answer
+Documents/Images → Document Loader → Chunking → Embeddings → Vector Store → Hybrid Retriever → LLM → Answer
+     ↓
+  Image Processor → OCR/Description → Document
 ```
 
 ## 必要条件
@@ -23,6 +26,7 @@ Documents → Document Loader → Embeddings → Vector Store → Retriever → 
 - Python 3.8+
 - AWSアカウント（Bedrock利用時）
 - Google AI APIキー（Gemini利用時）
+- Tesseract OCR（画像処理時）
 
 ## インストール
 
@@ -41,7 +45,17 @@ Documents → Document Loader → Embeddings → Vector Store → Retriever → 
    pip install -r requirements.txt
    ```
 
-4. 環境変数を設定（`.env`ファイル）
+4. Tesseract OCRをインストール（画像処理用）
+
+   ```bash
+   # macOS
+   brew install tesseract
+
+   # Ubuntu
+   sudo apt-get install tesseract-ocr tesseract-ocr-jpn
+   ```
+
+5. 環境変数を設定（`.env`ファイル）
 
    ```env
    # AWS設定
@@ -50,10 +64,10 @@ Documents → Document Loader → Embeddings → Vector Store → Retriever → 
    # S3設定（オプション）
    S3_BUCKET_NAME=your-bucket-name
 
-   # Bedrockモデル設定
-   BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+   # モデル設定（デフォルト: Gemini 2.5 Flash）
+   BEDROCK_MODEL_ID=gemini-2.5-flash
 
-   # Google AI APIキー（Gemini利用時）
+   # Google Gemini設定
    GOOGLE_API_KEY=your-google-ai-api-key
    ```
 
@@ -66,18 +80,18 @@ Documents → Document Loader → Embeddings → Vector Store → Retriever → 
    ```
 
 2. ブラウザで表示されるStreamlitインターフェースで操作
-   - LLMモデルを選択
-   - Temperatureと検索文書数を調整
-   - ドキュメントをアップロード
-   - 質問を入力して回答を取得
+   - **モデル設定タブ**: LLMモデルとパラメータを選択
+   - **検索設定タブ**: 検索文書数とフィルタを設定
+   - **ナレッジ管理タブ**: ドキュメントをアップロード
+   - **メイン画面**: 質問を入力して回答を取得
 
 ## 利用可能なモデル
 
+- **Google Gemini** (デフォルト):
+  - Gemini 2.5 Flash（マルチモーダル対応）
 - **AWS Bedrock**:
   - Claude 3 Haiku
-  - Amazon Nova Lite/Pro
-- **Google Gemini**:
-  - Gemini 1.5 Flash
+  - Amazon Nova Lite
 
 ## プロジェクト構造
 
@@ -86,43 +100,78 @@ Documents → Document Loader → Embeddings → Vector Store → Retriever → 
 ├── batch_ingest.py         # バッチドキュメント取り込みスクリプト
 ├── src/
 │   ├── aws_utils.py        # AWS BedrockとGeminiのクライアント
-│   ├── document_loader.py  # ドキュメント読み込み・処理
-│   ├── embeddings.py       # 埋め込みモデル管理
+│   ├── document_loader.py  # ドキュメント読み込み・チャンキング
+│   ├── embeddings.py       # 埋め込みモデル管理（BAAI/bge-m3）
+│   ├── image_processor.py  # 画像処理（OCR + 説明生成）
 │   ├── rag_chain.py        # RAGチェーン実装
-│   ├── vector_store.py     # ベクトルストア管理
-│   └── s3_manager.py       # S3連携（オプション）
-├── documents/              # サンプルドキュメント
+│   ├── vector_store.py     # Chromaベクトルストア管理
+│   └── agents/             # エージェント機能（現在無効）
+├── documents/              # ドキュメント格納ディレクトリ
 ├── requirements.txt        # Python依存関係
-└── .env                    # 環境変数設定
+├── .env                    # 環境変数設定
+└── README.md              # このファイル
 ```
 
 ## 機能詳細
 
 ### ドキュメント処理
 
-- 複数フォーマット対応（PDF, TXT, DOCX, XLSX）
-- 自動テキスト抽出とチャンク分割
-- 差分更新による効率的な知識ベース管理
+- **複数フォーマット対応**: PDF, TXT, DOCX, XLSX, JPG, PNG など
+- **構造保持チャンキング**: Unstructuredライブラリで文書構造を保持
+- **表処理**: PDF表のMarkdown変換 + LLM要約
+- **差分更新**: SQLRecordManagerによる効率的な同期
+
+### 画像処理
+
+- **OCR**: Tesseractによるテキスト抽出
+- **マルチモーダル**: Geminiによる画像理解（オプション）
+- **自動統合**: 画像をDocumentとしてベクトル化
 
 ### 検索機能
 
-- ベクトル検索による意味ベースの検索
-- BM25キーワード検索とのハイブリッド検索
-- 関連度スコアによるランキング
+- **ハイブリッド検索**: BM25 (40%) + ベクトル検索 (60%)
+- **メタデータフィルタ**: ファイルタイプ、フォルダで検索絞り込み
+- **関連度スコア**: 閾値によるフィルタリング
 
 ### UI機能
 
-- リアルタイムチャットインターフェース
-- モデル切り替え
-- パラメータ調整スライダー
-- ソース文書の表示
+- **タブ分けインターフェース**: モデル設定、検索設定、ナレッジ管理
+- **リアルタイム調整**: パラメータの動的変更
+- **フィードバックシステム**: 回答のGood/Bad評価
+
+## 技術仕様
+
+### チャンキング
+
+- **PDF/テキスト**: Unstructured chunk_by_title (構造保持)
+- **パラメータ**: max_characters=2000, new_after_n_chars=1500
+- **セパレータ**: 段落・文・単語の階層的分割
+
+### 埋め込み
+
+- **モデル**: BAAI/bge-m3 (多言語対応)
+- **次元**: 1024
+- **正規化**: 有効
+
+### ベクトルストア
+
+- **エンジン**: ChromaDB
+- **永続化**: ローカルファイル
+- **ハイブリッド**: EnsembleRetriever (BM25 + Vector)
 
 ## 注意事項
 
-- AWS Bedrockを使用するには適切なIAM権限が必要です
-- Geminiを使用するにはGoogle AI APIキーが必要です
+- Google Geminiを使用するにはAPIキーが必要です
+- 画像処理にはTesseract OCRが必要です
 - 大量のドキュメントを処理する場合、メモリ使用量に注意してください
+- ChromaDBはローカル永続化のため、環境移行時はデータ移行が必要です
+
+## 拡張性
+
+- **新しいLLM**: BedrockClient/GeminiClientの拡張で対応可能
+- **カスタムチャンキング**: DocumentLoaderの拡張で実装
+- **追加モダリティ**: 音声・動画処理の追加可能
 
 ## ライセンス
 
-このプロジェクトは学習目的で作成されたデモアプリケーションです。
+このプロジェクトは学習・デモ目的で作成されたオープンソースアプリケーションです。
