@@ -76,7 +76,7 @@ Documents/Images → Document Loader → Chunking → Embeddings → Vector Stor
 1. アプリケーションを起動
 
    ```bash
-   python main.py
+   streamlit run main.py
    ```
 
 2. ブラウザで表示されるStreamlitインターフェースで操作
