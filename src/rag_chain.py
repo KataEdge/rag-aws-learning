@@ -67,14 +67,16 @@ class RAGChain:
 
         return system_prompt, user_prompt
 
-    def query(self, question: str, history: List[Dict[str, str]] = [], k: int = 3, temperature: float = 0.1) -> Dict[str, Any]:
+    def query(self, question: str, history: List[Dict[str, str]] = [], k: int = 3, temperature: float = 0.1, filter: Dict[str, Any] = None, images: List[bytes] = None) -> Dict[str, Any]:
         """
-        RAGパイプライン全体を実行
+        RAGパイプライン全体を実行（マルチモーダル対応）
 
         Args:
             question: ユーザーの質問
             history: 会話履歴
             k: 検索する文書数
+            filter: メタデータフィルタ
+            images: 質問に付随する画像データ（バイト列のリスト）
 
         Returns:
             回答と検索結果を含む辞書
@@ -91,7 +93,7 @@ class RAGChain:
         else:
             # フォールバック: ベクトル検索
             print("ハイブリッド検索が利用できないため、ベクトル検索にフォールバックします")
-            relevant_docs = self.vector_store.similarity_search(rewritten_question, k=k)
+            relevant_docs = self.vector_store.similarity_search(rewritten_question, k=k, filter=filter)
 
         print(f"✅ {len(relevant_docs)}件の関連文書を取得")
 
@@ -100,7 +102,7 @@ class RAGChain:
 
         # 4. LLMで回答生成
         print(f"🤖 LLMで回答を生成中... (Temperature: {temperature})")
-        answer = self.bedrock.invoke_claude(user_prompt, system_prompt=system_prompt, temperature=temperature)
+        answer = self.bedrock.invoke_claude(user_prompt, system_prompt=system_prompt, temperature=temperature, images=images)
 
         # 5. 結果を返す
         return {

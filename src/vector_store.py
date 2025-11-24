@@ -64,21 +64,21 @@ class VectorStoreManager:
             raise FileNotFoundError("ベクトルストアが見つかりません")
     
 
-    def similarity_search(self, query, k=3, threshold=0.5):
-        """類似検索（閾値付き）"""
+    def similarity_search(self, query, k=3, threshold=0.5, filter=None):
+        """類似検索（閾値付き、メタデータフィルタリング対応）"""
         if self.vectorstore is None:
             raise ValueError("ベクトルストアが初期化されていません")
-        
-        results = self.vectorstore.similarity_search_with_score(query, k=min(k * 2, 10))
+
+        results = self.vectorstore.similarity_search_with_score(query, k=min(k * 2, 10), filter=filter)
         filtered_docs = [
             doc for doc, score in results if score >= threshold
         ]
         final_docs = filtered_docs[:k]
-        
+
         print(
             f"閾値{threshold}でフィルタリング: {len(results)}件中{len(final_docs)}件を取得"
         )
-        
+
         return final_docs
 
         
@@ -151,3 +151,23 @@ class VectorStoreManager:
 
             print("ハイブリッド検索 Retriever を作成しました")
             return ensemble_retriever
+
+    def clear_database(self):
+        """Chromaデータベースを完全にクリア"""
+        import shutil
+
+        # ベクトルストアを削除
+        if os.path.exists(self.persist_directory):
+            shutil.rmtree(self.persist_directory)
+            print(f"Chromaデータベースを削除しました: {self.persist_directory}")
+
+        # レコードマネージャーのキャッシュを削除
+        if os.path.exists("record_manager_cache.sql"):
+            os.remove("record_manager_cache.sql")
+            print("レコードマネージャーのキャッシュを削除しました")
+
+        # インスタンス変数をリセット
+        self.vectorstore = None
+        self.parent_retriever = None
+
+        print("データベースのクリアが完了しました")

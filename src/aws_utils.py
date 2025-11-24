@@ -1,7 +1,8 @@
 import boto3
 import time
 import json
-from typing import Dict, Any
+import base64
+from typing import Dict, Any, List, Union
 import botocore
 import random
 import google.generativeai as genai
@@ -35,21 +36,40 @@ class BedrockClient:
         else:
             return 'unknown'
 
-    def invoke_model(self, prompt: str, system_prompt: str = None, temperature: float = 0.7, max_tokens: int = 2000) -> str:
+    def invoke_model(self, prompt: str, system_prompt: str = None, temperature: float = 0.7, max_tokens: int = 2000, images: List[bytes] = None) -> str:
         """
-        汎用的なモデル呼び出しメソッド
+        汎用的なモデル呼び出しメソッド（テキスト + 画像対応）
         """
         model_type = self._get_model_type()
         print(f"🔧 モデル: {self.model_id}, Temperature: {temperature}, Max Tokens: {max_tokens}")
 
         if model_type == 'claude':
+            # コンテンツの構築
+            content = []
+            if images:
+                for image_bytes in images:
+                    # 画像をbase64エンコード
+                    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                    content.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",  # 仮定、実際はMIMEタイプを検出
+                            "data": image_base64
+                        }
+                    })
+            content.append({
+                "type": "text",
+                "text": prompt
+            })
+
             payload = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": max_tokens,
                 "messages": [
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": content
                     }
                 ],
                 "temperature": temperature,
@@ -132,11 +152,11 @@ class BedrockClient:
                 print(f"❌ Bedrock呼び出しエラー: {e}")
                 raise
     
-    def invoke_claude(self, prompt: str, system_prompt: str = None, temperature: float = 0.7, max_tokens: int = 2000) -> str:
+    def invoke_claude(self, prompt: str, system_prompt: str = None, temperature: float = 0.7, max_tokens: int = 2000, images: List[bytes] = None) -> str:
         """
         Claudeモデルを呼び出し（後方互換性のため）
         """
-        return self.invoke_model(prompt, system_prompt, temperature, max_tokens)
+        return self.invoke_model(prompt, system_prompt, temperature, max_tokens, images)
     
     def test_connection(self) -> bool:
         """
@@ -160,9 +180,9 @@ class GeminiClient:
         self.model_name = model_name
         self.model = genai.GenerativeModel(model_name)
 
-    def invoke_model(self, prompt: str, system_prompt: str = None, temperature: float = 0.7, max_tokens: int = 2000) -> str:
+    def invoke_model(self, prompt: str, system_prompt: str = None, temperature: float = 0.7, max_tokens: int = 2000, images: List[bytes] = None) -> str:
         """
-        Geminiモデルを呼び出し
+        Geminiモデルを呼び出し（マルチモーダル対応）
         """
         print(f"🔧 Geminiモデル: {self.model_name}, Temperature: {temperature}, Max Tokens: {max_tokens}")
 
@@ -171,7 +191,18 @@ class GeminiClient:
         if system_prompt:
             messages.append({"role": "user", "parts": [system_prompt]})
             messages.append({"role": "model", "parts": ["了解しました。"]})  # システムプロンプトの確認
-        messages.append({"role": "user", "parts": [prompt]})
+
+        # ユーザー入力の構築
+        user_parts = []
+        if images:
+            for image_bytes in images:
+                # PIL Imageに変換
+                from PIL import Image
+                import io
+                image = Image.open(io.BytesIO(image_bytes))
+                user_parts.append(image)
+        user_parts.append(prompt)
+        messages.append({"role": "user", "parts": user_parts})
 
         generation_config = genai.types.GenerationConfig(
             temperature=temperature,
@@ -183,16 +214,25 @@ class GeminiClient:
                 messages,
                 generation_config=generation_config
             )
+
+            # 安全フィルターのチェック
+            if response.candidates:
+                candidate = response.candidates[0]
+                if candidate.finish_reason == 2:  # SAFETY
+                    return "申し訳ありませんが、安全ポリシーに違反する内容のため、回答を生成できませんでした。"
+                elif candidate.finish_reason != 1:  # 1 is FINISH_REASON_UNSPECIFIED (normal)
+                    return f"応答が完了しませんでした。理由: {candidate.finish_reason}"
+
             return response.text
         except Exception as e:
             print(f"❌ Gemini呼び出しエラー: {e}")
             raise
 
-    def invoke_claude(self, prompt: str, system_prompt: str = None, temperature: float = 0.7, max_tokens: int = 2000) -> str:
+    def invoke_claude(self, prompt: str, system_prompt: str = None, temperature: float = 0.7, max_tokens: int = 2000, images: List[bytes] = None) -> str:
         """
         Claude互換メソッド（後方互換性のため）
         """
-        return self.invoke_model(prompt, system_prompt, temperature, max_tokens)
+        return self.invoke_model(prompt, system_prompt, temperature, max_tokens, images)
 
     def test_connection(self) -> bool:
         """
